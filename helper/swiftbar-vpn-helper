@@ -1,0 +1,54 @@
+#!/bin/zsh -f
+# swiftbar-vpn root helper. Installed root-owned by helper/install-helper.sh and called via sudo;
+# sudoers allows exactly the commands below. Never runs anything from user-writable paths:
+# openfortivpn and its OpenSSL libs are root-owned copies, configs are root-owned, env is empty.
+#
+#   forti-connect <host:port>  FortiClient SSL VPN via openfortivpn, SAML login in the browser
+#   forti-stop                 stop openfortivpn
+#   hosts-update               refresh the swiftbar-vpn block in /etc/hosts (VPN servers reachable
+#                              without DNS); keeps the last known IP when DNS does not answer
+DIR=/usr/local/libexec/swiftbar-vpn
+FORTI_HOSTS=(@FORTI_HOSTS@)   # host:port allowed for forti-connect
+VPN_HOSTS=(@VPN_HOSTS@)       # every VPN server name, pinned in /etc/hosts
+HOSTS=/etc/hosts
+BEGIN="# >>> swiftbar-vpn (managed by $DIR/helper hosts-update – do not edit)"
+END="# <<< swiftbar-vpn"
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+case $1 in
+  forti-connect)
+    (( $# == 2 && ${FORTI_HOSTS[(Ie)$2]} )) || { print -u2 "host not allowed: $2"; exit 2 }
+    exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/var/root \
+      OPENSSL_CONF=$DIR/openssl.cnf OPENSSL_MODULES=$DIR/no-modules OPENSSL_ENGINES=$DIR/no-modules \
+      $DIR/openfortivpn $2 -c $DIR/openfortivpn.conf --saml-login ;;
+
+  forti-stop)
+    (( $# == 1 )) || exit 2
+    /usr/bin/pkill -INT -f "^$DIR/openfortivpn "
+    exit 0 ;;
+
+  hosts-update)
+    (( $# == 1 )) || exit 2
+    typeset -A old
+    typeset ip h
+    while read -r ip h; do old[$h]=$ip; done < <(/usr/bin/awk -v b="$BEGIN" -v e="$END" \
+      '$0 == b {f=1; next} $0 == e {f=0} f && $1 ~ /^[0-9.]+$/ {print $1, $2}' $HOSTS)
+    block=($BEGIN)
+    for h in $VPN_HOSTS; do
+      ip=$(/usr/bin/dig +short +time=1 +tries=1 A $h 2>/dev/null | /usr/bin/grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | /usr/bin/head -1)
+      [[ -z $ip ]] && ip=${old[$h]}   # DNS down or no answer: keep the last known address
+      [[ -n $ip ]] && block+=("$ip $h")
+    done
+    block+=($END)
+    rest=$(/usr/bin/awk -v b="$BEGIN" -v e="$END" '$0 == b {f=1; next} $0 == e {f=0; next} !f' $HOSTS)
+    new="$rest"$'\n'"${(F)block}"
+    [[ $new == $(<$HOSTS) ]] && exit 0
+    tmp=$(/usr/bin/mktemp /etc/hosts.swiftbar-vpn.XXXXXX) || exit 1
+    print -r -- $new > $tmp && /bin/chmod 644 $tmp && /bin/mv -f $tmp $HOSTS
+    /usr/bin/dscacheutil -flushcache
+    /usr/bin/killall -HUP mDNSResponder 2>/dev/null
+    exit 0 ;;
+
+  *)
+    print -u2 "usage: helper forti-connect <host:port> | forti-stop | hosts-update"; exit 2 ;;
+esac

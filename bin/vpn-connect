@@ -1,0 +1,221 @@
+#!/bin/zsh
+VPN=/opt/cisco/secureclient/bin/vpn
+HELPER=/usr/local/libexec/swiftbar-vpn/helper    # root helper, see helper/install-helper.sh
+SELF=${0:A}
+CONF=${SELF:h:h}/vpn.conf
+STATE_DIR=$HOME/bin                # log + state files (read by the SwiftBar plugin)
+CURRENT=$STATE_DIR/.vpn-current    # "<profile> <host>" after a successful connect, removed by "off"
+STATUS=$STATE_DIR/.vpn-status      # "<profile> <phase>" while a connect is running
+LOCK=$STATE_DIR/.vpn-lock
+
+# --- SwiftBar: refresh the menu bar item and show notifications
+urlenc() {
+  local s=$1 out= c i
+  for (( i = 1; i <= ${#s}; i++ )); do
+    c=${s[i]}
+    if [[ $c == [A-Za-z0-9._~-] ]]; then out+=$c; else out+=$(printf '%%%02X' "'$c"); fi
+  done
+  print -r -- $out
+}
+refresh() { /usr/bin/open -g "swiftbar://refreshplugin?name=vpn" 2>/dev/null }
+notify()  { /usr/bin/open -g "swiftbar://notify?plugin=vpn&title=$(urlenc $1)&body=$(urlenc $2)" 2>/dev/null }
+
+forti_running() { pgrep -qf "^${HELPER:h}/openfortivpn " }
+
+# --- profile from vpn.conf -> TYPE LABEL HOST GROUP VUSER AUTH SMS_MATCH
+load_profile() {
+  local id type label host group user auth match
+  while read -r id type label host group user auth match; do
+    [[ $id == $1 ]] || continue
+    TYPE=$type LABEL=$label HOST=$host GROUP=$group VUSER=$user AUTH=$auth SMS_MATCH=${match:#-}
+    return 0
+  done < $CONF
+  return 1
+}
+
+# internal: progress report from expect ($2=profile $3=phase)
+if [[ $1 == _phase ]]; then
+  print "$2 $3" > $STATUS
+  refresh
+  [[ $3 == duo ]] && load_profile $2 && notify "VPN $LABEL" "Approve the Duo push on your phone"
+  exit 0
+fi
+
+# internal: SMS code – try reading it from Messages, otherwise ask in a dialog
+if [[ $1 == _smscode ]]; then
+  SINCE=$2
+  ask() { /usr/bin/osascript -e "text returned of (display dialog \"SMS code for $LABEL VPN:\" default answer \"\" with title \"VPN $LABEL\")" }
+  # no access to Messages (Full Disk Access missing) -> ask right away
+  /usr/bin/sqlite3 ~/Library/Messages/chat.db "select 1 limit 1;" >/dev/null 2>&1 || { ask; exit }
+  FILTER=
+  [[ -n $SMS_MATCH ]] && FILTER="AND COALESCE(text, CAST(attributedBody AS TEXT)) LIKE '%${SMS_MATCH//"'"/"''"}%'"
+  for i in {1..15}; do
+    CODE=$(/usr/bin/sqlite3 ~/Library/Messages/chat.db "
+      SELECT COALESCE(text, CAST(attributedBody AS TEXT)) FROM message
+      WHERE is_from_me = 0 AND date/1000000000 + 978307200 >= $SINCE $FILTER
+      ORDER BY date DESC LIMIT 1;" 2>/dev/null | LC_ALL=C grep -aoE '[0-9]{4,8}' | head -1)
+    [[ -n $CODE ]] && { echo $CODE; exit 0; }
+    sleep 2
+  done
+  ask
+  exit
+fi
+
+[[ -f $CONF ]] || { echo "No $CONF – copy vpn.conf.example to vpn.conf and edit it"; exit 1; }
+PROFILES=(${(f)"$(grep -v '^#' $CONF | awk 'NF {print $1}')"})
+
+case $1 in
+  off)
+    # also cancels a connect in progress (CLI, SMS helper and its dialog);
+    # STATUS goes first so the running vpn-connect knows it was cancelled
+    rm -f $CURRENT $STATUS
+    pkill -f "$SELF _smscode" 2>/dev/null
+    pkill -f "SMS code for" 2>/dev/null
+    pkill -f "$VPN connect" 2>/dev/null
+    forti_running && sudo -n $HELPER forti-stop
+    $VPN disconnect
+    refresh
+    exit ;;
+  ''|-h|--help)
+    echo "usage: vpn-connect ${(j:|:)PROFILES}|off"; exit 1 ;;
+esac
+load_profile $1 || { echo "unknown profile '$1' (${(j:, :)PROFILES})"; exit 1; }
+[[ $TYPE == (anyconnect|forticlient) ]] || {
+  notify "VPN $LABEL" "VPN client '$TYPE' is not supported yet"
+  echo "VPN client '$TYPE' is not supported yet"; exit 1
+}
+[[ $TYPE == forticlient && ! -x $HELPER ]] && {
+  notify "VPN $LABEL" "FortiClient helper missing - see README (helper/install-helper.sh)"
+  echo "Root helper not installed - run: sudo ${SELF:h:h}/helper/install-helper.sh"; exit 1
+}
+
+# one connect at a time (lock is released on exit, not inherited by child processes)
+zmodload zsh/system
+: >> $LOCK   # flock needs an existing file
+zsystem flock -t 0 $LOCK 2>/dev/null || {
+  notify "VPN $LABEL" "Another connection attempt is still running"
+  echo "Another connection attempt is still running"; exit 1
+}
+
+# check the Keychain entry exists (without reading the password)
+[[ $TYPE == anyconnect ]] && ! /usr/bin/security find-generic-password -a $VUSER -s $HOST >/dev/null 2>&1 && {
+  notify "VPN $LABEL" "No password in Keychain for $VUSER @ $HOST"
+  echo "No password in Keychain for $VUSER @ $HOST"; exit 1
+}
+
+trap 'rm -f $STATUS' EXIT
+rm -f $CURRENT $STATE_DIR/.vpn-dropped
+print "$1 connecting" > $STATUS
+refresh
+LOG=$STATE_DIR/vpn-connect.log
+
+# result -> state file + notification, then exit
+finish() {
+  local rc=$1 msg
+  [[ -f $STATUS ]] || exit 1   # status file gone = cancelled via "vpn-connect off" – stay quiet
+  case $rc in
+    0) print "$PROFILE $HOST" > $CURRENT
+       notify "VPN $LABEL" "Connected to $HOST" ;;
+    2) notify "VPN $LABEL failed" "Authentication failed - check the password in Keychain" ;;
+    3) [[ $AUTH == duo ]] && msg="Timed out - Duo not approved?" || msg="Timed out"
+       notify "VPN $LABEL failed" $msg ;;
+    4) notify "VPN $LABEL failed" "No SMS code entered" ;;
+    5) notify "VPN $LABEL failed" "Cannot read the password from Keychain" ;;
+    *) notify "VPN $LABEL failed" "Connection failed - see Show last log" ;;
+  esac
+  rm -f $STATUS
+  refresh
+  exit $rc
+}
+PROFILE=$1
+
+# one VPN at a time
+forti_running && sudo -n $HELPER forti-stop && sleep 2
+[[ $TYPE == forticlient ]] && $VPN state 2>/dev/null | grep -q 'state: Connected' && $VPN disconnect >/dev/null 2>&1
+
+# pin VPN server addresses in /etc/hosts (refreshed when DNS answers, kept when it does not)
+[[ -x $HELPER ]] && sudo -n $HELPER hosts-update >/dev/null 2>&1
+
+# FortiClient: root helper runs openfortivpn, login (SSO + Duo) happens in the browser
+if [[ $TYPE == forticlient ]]; then
+  : > $LOG
+  sudo -n $HELPER forti-connect $HOST >> $LOG 2>&1 < /dev/null &!
+  URL=
+  for i in {1..10}; do   # openfortivpn prints the SAML start URL once its listener is up
+    URL=$(grep -o "https://[^' ]*/remote/saml/start[^' ]*" $LOG | head -1)
+    [[ -n $URL ]] && break
+    sleep 0.5
+  done
+  forti_running || finish 1
+  /usr/bin/open "${URL:-https://$HOST/remote/saml/start?redirect=1}"
+  print "$PROFILE browser" > $STATUS
+  refresh
+  notify "VPN $LABEL" "Sign in in the browser and approve Duo"
+  for i in {1..180}; do
+    grep -q 'Tunnel is up and running' $LOG && finish 0
+    [[ -f $STATUS ]] || { sudo -n $HELPER forti-stop; exit 1; }   # cancelled
+    forti_running || finish 1
+    sleep 1
+  done
+  sudo -n $HELPER forti-stop
+  finish 3
+fi
+
+# the Secure Client window blocks the command line – force it closed
+pkill -f "Cisco Secure Client.app" 2>/dev/null
+pkill -f "$VPN" 2>/dev/null
+sleep 1
+$VPN disconnect >/dev/null 2>&1
+
+# pre-set Secure Client defaults so prompts default to the right values
+PREFS=~/.vpn/.anyconnect
+[[ -f $PREFS ]] && sed -i '' \
+  -e "s|<DefaultHostName>.*</DefaultHostName>|<DefaultHostName>$HOST</DefaultHostName>|" \
+  -e "s|<DefaultUser>.*</DefaultUser>|<DefaultUser>$VUSER</DefaultUser>|" \
+  -e "s|<DefaultGroup>.*</DefaultGroup>|<DefaultGroup>$GROUP</DefaultGroup>|" "$PREFS"
+
+# the password is read from Keychain inside expect, so it never sits in an environment variable
+export VPN HOST GROUP VUSER AUTH LABEL SMS_MATCH SELF PROFILE LOG
+/usr/bin/expect <<'EXP'
+  set timeout 30
+  log_file -noappend $env(LOG)
+  set g 0; set u 0; set p 0; set since [clock seconds]
+  spawn $env(VPN) connect $env(HOST)
+  expect {
+    -re {Group: (\[([^\]]*)\] ?)?$} {
+        if {!$g} {
+          set g 1
+          set buf $expect_out(buffer)
+          if {[info exists expect_out(2,string)] && $expect_out(2,string) eq $env(GROUP)} {
+            send "\r"
+          } elseif {[regexp "(\\d+)\\) $env(GROUP)\r" $buf -> idx]} {
+            send -- "$idx\r"
+          } else {
+            send -- "$env(GROUP)\r"
+          }
+        }
+        exp_continue }
+    -re {Username: (\[[^\]]*\] ?)?$} { if {!$u} { set u 1; send -- "$env(VUSER)\r" }; exp_continue }
+    -re {Password: ?$} {
+        if {!$p} {
+          set p 1; set since [clock seconds]
+          if {[catch {exec /usr/bin/security find-generic-password -a $env(VUSER) -s $env(HOST) -w 2>/dev/null} pass]} { exit 5 }
+          sleep 0.5; send -- "$pass\r"; unset pass
+          set timeout 120
+          if {$env(AUTH) eq "duo"} { catch {exec $env(SELF) _phase $env(PROFILE) duo} }
+        }
+        exp_continue }
+    -re {Answer: ?$} {
+        catch {exec $env(SELF) _phase $env(PROFILE) sms}
+        sleep 0.5
+        if {[catch {exec $env(SELF) _smscode $since} code]} { exit 4 }
+        send -- "[string trim $code]\r"; exp_continue }
+    -re {accept\?}     { send "y\r"; exp_continue }
+    "state: Connected" { exit 0 }
+    "Login failed"     { puts "\nLogin failed"; exit 2 }
+    "Authentication failed" { puts "\nAuthentication failed - check the password in Keychain"; exit 2 }
+    timeout            { puts "\nTimeout"; exit 3 }
+    eof                { exit 1 }
+  }
+EXP
+finish $?

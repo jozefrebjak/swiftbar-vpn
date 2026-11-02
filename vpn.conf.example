@@ -1,0 +1,19 @@
+# VPN profiles – copy to vpn.conf (git-ignored) and edit. Read by bin/vpn-connect,
+# swiftbar/vpn.10s.sh and helper/install-helper.sh. No secrets here:
+# passwords live in Keychain (account = user, service = host).
+#
+# id:        what you pass to vpn-connect – unique across clients
+# type:      VPN client, the menu groups by it – anyconnect (Cisco Secure Client CLI),
+#            forticlient (openfortivpn + SAML login in the browser, needs the root helper);
+#            anything else is shown in the menu but cannot connect yet
+# label:     name in the menu
+# host:      server; forticlient: host:port, must be allowed in the root helper
+# group:     AnyConnect group, "-" when the client has none
+# user:      AnyConnect username (also the Keychain account), "-" for forticlient
+# 2fa:       duo (Duo push) | sms (SMS code) | "-" = none
+# sms_match: text the SMS must contain (SQL LIKE, case-insensitive), "-" = any incoming SMS
+#
+# id        type         label   host                  group      user  2fa  sms_match
+work        anyconnect   Work    vpn.example.com       Employees  jdoe  duo  -
+uni         anyconnect   Uni     ra.example.edu        External   jdoe  sms  -
+work-forti  forticlient  Work    fw.example.com:10443  -          -     duo  -
