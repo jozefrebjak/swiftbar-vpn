@@ -10,10 +10,9 @@
 # host:      server; forticlient: host:port, must be allowed in the root helper
 # group:     AnyConnect group, "-" when the client has none
 # user:      AnyConnect username (also the Keychain account), "-" for forticlient
-# 2fa:       duo (Duo push) | sms (SMS code) | "-" = none
-# sms_match: text the SMS must contain (SQL LIKE, case-insensitive), "-" = any incoming SMS
+# 2fa:       duo (Duo push) | sms (SMS code, typed into a dialog) | "-" = none
 #
-# id        type         label   host                  group      user  2fa  sms_match
-work        anyconnect   Work    vpn.example.com       Employees  jdoe  duo  -
-uni         anyconnect   Uni     ra.example.edu        External   jdoe  sms  -
-work-forti  forticlient  Work    fw.example.com:10443  -          -     duo  -
+# id        type         label   host                  group      user  2fa
+work        anyconnect   Work    vpn.example.com       Employees  jdoe  duo
+uni         anyconnect   Uni     ra.example.edu        External   jdoe  sms
+work-forti  forticlient  Work    fw.example.com:10443  -          -     duo

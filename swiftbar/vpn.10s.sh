@@ -21,7 +21,7 @@ fi
 
 typeset -A TYPE LABEL HOSTS GROUP AUTH BYUSER
 IDS=()
-while read -r id type label host group user auth match; do
+while read -r id type label host group user auth rest; do
   [[ -z $id || $id == \#* ]] && continue
   IDS+=$id; TYPE[$id]=$type; LABEL[$id]=$label; HOSTS[$id]=$host; GROUP[$id]=$group; AUTH[$id]=$auth
   [[ $type == anyconnect ]] && BYUSER[$user]=$id

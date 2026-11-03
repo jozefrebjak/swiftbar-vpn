@@ -26,7 +26,7 @@ What you get:
 
 - one click per VPN; while connecting the menu shows what it's waiting for (Duo push, SMS code, browser sign-in) and offers Cancel
 - notifications when Duo needs approval, when you're connected, why a connection failed, and when it drops (with Reconnect)
-- passwords only in Keychain; SMS codes read from Messages if you allow it
+- passwords only in Keychain; 2FA stays manual: approve Duo on your phone, type SMS codes into a dialog
 - one VPN and one connection attempt at a time
 - VPN servers pinned in `/etc/hosts`, so a broken DNS doesn't lock you out
 
@@ -80,10 +80,10 @@ $ vpn-connect off
 `vpn.conf` has one VPN per line, columns separated by whitespace, `-` where a column doesn't apply.
 
 ```text
-# id        type         label  host                  group      user  2fa  sms_match
-work        anyconnect   Work   vpn.example.com       Employees  jdoe  duo  -
-uni         anyconnect   Uni    ra.example.edu        External   jdoe  sms  -
-work-forti  forticlient  Work   fw.example.com:10443  -          -     duo  -
+# id        type         label  host                  group      user  2fa
+work        anyconnect   Work   vpn.example.com       Employees  jdoe  duo
+uni         anyconnect   Uni    ra.example.edu        External   jdoe  sms
+work-forti  forticlient  Work   fw.example.com:10443  -          -     duo
 ```
 
 | Column | Meaning |
@@ -95,14 +95,13 @@ work-forti  forticlient  Work   fw.example.com:10443  -          -     duo  -
 | `group` | AnyConnect group. |
 | `user` | AnyConnect username and Keychain account. |
 | `2fa` | `duo`, `sms` or `-`. |
-| `sms_match` | Text the SMS must contain, so a bank code arriving at the same moment isn't sent to the VPN. |
 
 > [!IMPORTANT]
 > The root helper copies the host list at install time. Run `sudo helper/install-helper.sh` again whenever you add or change a host.
 
 ## How it works
 
-**AnyConnect.** `vpn-connect` drives the official `vpn` CLI with `expect` and answers the group, username, password and SMS prompts. The password is read from Keychain inside `expect`, right before it's sent, so it never sits in an environment variable where `ps -E` could see it. The SMS code comes from `~/Library/Messages/chat.db` when SwiftBar has Full Disk Access and the iPhone forwards SMS to the Mac. Otherwise a dialog asks for it.
+**AnyConnect.** `vpn-connect` drives the official `vpn` CLI with `expect` and answers the group, username, password and SMS prompts. The password is read from Keychain inside `expect`, right before it's sent, so it never sits in an environment variable where `ps -E` could see it. The SMS code is typed into a dialog. Reading it from Messages would need Full Disk Access for SwiftBar and would put both factors on the same Mac, so 2FA stays a manual step.
 
 **FortiClient.** openfortivpn runs with `--saml-login`. The FortiGate sign-in page opens in your default browser, you do SSO and Duo there, the login comes back to `127.0.0.1:8020` and openfortivpn brings up `ppp0`.
 
@@ -152,8 +151,6 @@ sudo ~/swiftbar-vpn/helper/install-helper.sh --uninstall
 **Wait before the password.** About 0.5 s. The CLI flushes input when it turns echo off.
 
 **Never debug `expect` with `exp_internal`.** It logs the password in clear text.
-
-**SMS text is often NULL.** In `chat.db` the body frequently lives in `attributedBody`, so read both.
 
 **SwiftBar runs every executable in its folder.** A `plugin.sh.bak` next to the plugin is a second icon.
 

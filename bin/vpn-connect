@@ -22,12 +22,12 @@ notify()  { /usr/bin/open -g "swiftbar://notify?plugin=vpn&title=$(urlenc $1)&bo
 
 forti_running() { pgrep -qf "^${HELPER:h}/openfortivpn " }
 
-# --- profile from vpn.conf -> TYPE LABEL HOST GROUP VUSER AUTH SMS_MATCH
+# --- profile from vpn.conf -> TYPE LABEL HOST GROUP VUSER AUTH
 load_profile() {
-  local id type label host group user auth match
-  while read -r id type label host group user auth match; do
+  local id type label host group user auth rest
+  while read -r id type label host group user auth rest; do
     [[ $id == $1 ]] || continue
-    TYPE=$type LABEL=$label HOST=$host GROUP=$group VUSER=$user AUTH=$auth SMS_MATCH=${match:#-}
+    TYPE=$type LABEL=$label HOST=$host GROUP=$group VUSER=$user AUTH=$auth
     return 0
   done < $CONF
   return 1
@@ -41,23 +41,9 @@ if [[ $1 == _phase ]]; then
   exit 0
 fi
 
-# internal: SMS code – try reading it from Messages, otherwise ask in a dialog
+# internal: SMS code – asked in a dialog, 2FA stays a manual step
 if [[ $1 == _smscode ]]; then
-  SINCE=$2
-  ask() { /usr/bin/osascript -e "text returned of (display dialog \"SMS code for $LABEL VPN:\" default answer \"\" with title \"VPN $LABEL\")" }
-  # no access to Messages (Full Disk Access missing) -> ask right away
-  /usr/bin/sqlite3 ~/Library/Messages/chat.db "select 1 limit 1;" >/dev/null 2>&1 || { ask; exit }
-  FILTER=
-  [[ -n $SMS_MATCH ]] && FILTER="AND COALESCE(text, CAST(attributedBody AS TEXT)) LIKE '%${SMS_MATCH//"'"/"''"}%'"
-  for i in {1..15}; do
-    CODE=$(/usr/bin/sqlite3 ~/Library/Messages/chat.db "
-      SELECT COALESCE(text, CAST(attributedBody AS TEXT)) FROM message
-      WHERE is_from_me = 0 AND date/1000000000 + 978307200 >= $SINCE $FILTER
-      ORDER BY date DESC LIMIT 1;" 2>/dev/null | LC_ALL=C grep -aoE '[0-9]{4,8}' | head -1)
-    [[ -n $CODE ]] && { echo $CODE; exit 0; }
-    sleep 2
-  done
-  ask
+  /usr/bin/osascript -e "text returned of (display dialog \"SMS code for $LABEL VPN:\" default answer \"\" with title \"VPN $LABEL\")"
   exit
 fi
 
@@ -175,11 +161,11 @@ PREFS=~/.vpn/.anyconnect
   -e "s|<DefaultGroup>.*</DefaultGroup>|<DefaultGroup>$GROUP</DefaultGroup>|" "$PREFS"
 
 # the password is read from Keychain inside expect, so it never sits in an environment variable
-export VPN HOST GROUP VUSER AUTH LABEL SMS_MATCH SELF PROFILE LOG
+export VPN HOST GROUP VUSER AUTH LABEL SELF PROFILE LOG
 /usr/bin/expect <<'EXP'
   set timeout 30
   log_file -noappend $env(LOG)
-  set g 0; set u 0; set p 0; set since [clock seconds]
+  set g 0; set u 0; set p 0
   spawn $env(VPN) connect $env(HOST)
   expect {
     -re {Group: (\[([^\]]*)\] ?)?$} {
@@ -198,7 +184,7 @@ export VPN HOST GROUP VUSER AUTH LABEL SMS_MATCH SELF PROFILE LOG
     -re {Username: (\[[^\]]*\] ?)?$} { if {!$u} { set u 1; send -- "$env(VUSER)\r" }; exp_continue }
     -re {Password: ?$} {
         if {!$p} {
-          set p 1; set since [clock seconds]
+          set p 1
           if {[catch {exec /usr/bin/security find-generic-password -a $env(VUSER) -s $env(HOST) -w 2>/dev/null} pass]} { exit 5 }
           sleep 0.5; send -- "$pass\r"; unset pass
           set timeout 120
@@ -208,7 +194,7 @@ export VPN HOST GROUP VUSER AUTH LABEL SMS_MATCH SELF PROFILE LOG
     -re {Answer: ?$} {
         catch {exec $env(SELF) _phase $env(PROFILE) sms}
         sleep 0.5
-        if {[catch {exec $env(SELF) _smscode $since} code]} { exit 4 }
+        if {[catch {exec $env(SELF) _smscode} code]} { exit 4 }
         send -- "[string trim $code]\r"; exp_continue }
     -re {accept\?}     { send "y\r"; exp_continue }
     "state: Connected" { exit 0 }
