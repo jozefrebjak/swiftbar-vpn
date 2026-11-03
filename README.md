@@ -42,6 +42,16 @@ sudo ~/swiftbar-vpn/helper/install-helper.sh   # root helper for FortiClient and
 
 Then point SwiftBar's **Plugin Folder** at `~/bin/swiftbar`. From a terminal, `vpn-connect work` and `vpn-connect off` do the same.
 
+### Demo
+
+To see the menu without any VPN, or to take screenshots, add a demo icon with fake profiles:
+
+```bash
+~/swiftbar-vpn/examples/demo/demo.sh              # connected
+~/swiftbar-vpn/examples/demo/demo.sh connecting   # waiting for Duo
+~/swiftbar-vpn/examples/demo/demo.sh remove
+```
+
 ## Configuration
 
 One VPN per line in `vpn.conf`, `-` where a column doesn't apply:

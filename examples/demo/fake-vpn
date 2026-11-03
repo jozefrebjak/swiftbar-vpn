@@ -1,0 +1,6 @@
+#!/bin/zsh
+# stands in for the Cisco Secure Client CLI: always "connected" with fixed stats
+case $1 in
+  state) echo "  >> state: Connected" ;;
+  stats) printf '%s\n' "Server Address:   vpn.example.com" "Client Address (IPv4):   10.20.30.40" "Duration:   01:12:09" ;;
+esac
