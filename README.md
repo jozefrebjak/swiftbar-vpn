@@ -4,23 +4,9 @@ All your VPNs behind one menu bar icon on macOS. Cisco AnyConnect and FortiClien
 
 This is a starting point, not a product. It's the generic version of the setup I use every day, published so you don't have to begin from an empty file. Put your VPNs into `vpn.conf`, keep what fits, change what doesn't. The write-up is on [rebjak.com](https://rebjak.com/en/blog/all-vpns-in-the-macos-menu-bar/).
 
-```text
- Connected to Work
-   AnyConnect · Work · Employees · 2FA Duo
-   vpn.example.com
-   10.20.30.40  (click to copy)
-   Connected for 01:12:09
- ──────────────────────────────
- AnyConnect
- ✓ Work  ·  Employees  ·  2FA Duo
-   Uni   ·  External   ·  2FA SMS
- ──────────────────────────────
- FortiClient
-   Work  ·  2FA Duo
- ──────────────────────────────
- Disconnect
- Show last log
-```
+<p align="center">
+  <img src="docs/menu.webp" alt="SwiftBar menu with all VPNs, connected to Work via AnyConnect with Duo" width="476">
+</p>
 
 What you get:
 
